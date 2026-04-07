@@ -1946,9 +1946,17 @@ server.registerTool(
         .string()
         .describe("The path to the script to get the content of. If passing a GC'd script proxy (e.g. <ScriptProxy: 1_316566>), use the literal angle brackets < > — do NOT HTML-encode them as &lt; or &gt;.")
         .optional(),
+      startLine: z
+        .number()
+        .describe("Optional start line number (1-based) to return only a range of lines from the decompiled script. If omitted, returns the full script.")
+        .optional(),
+      endLine: z
+        .number()
+        .describe("Optional end line number (1-based, inclusive) to return only a range of lines. Defaults to end of script if startLine is set but endLine is omitted.")
+        .optional(),
     }),
   },
-  async ({ scriptGetterSource, scriptPath }) => {
+  async ({ scriptGetterSource, scriptPath, startLine, endLine }) => {
     if (scriptGetterSource === undefined && scriptPath === undefined) {
       return {
         success: false,
@@ -1974,12 +1982,14 @@ server.registerTool(
     const scriptProxyMatch = (scriptPath ?? scriptGetterSource ?? "").match(/^<ScriptProxy: (.+)>$/);
 
     const toolCallId = SendArbitraryDataToClient("get-script-content", scriptProxyMatch
-      ? { debugId: scriptProxyMatch[1] }
+      ? { debugId: scriptProxyMatch[1], startLine, endLine }
       : {
         source:
           scriptGetterSource === undefined
             ? `return ${scriptPath}`
             : scriptGetterSource,
+        startLine,
+        endLine,
       }, undefined, activeClientId);
 
     if (toolCallId === null) {
@@ -2033,10 +2043,19 @@ server.registerTool(
         )
         .optional()
         .default(8),
+      timeout: z
+        .number()
+        .describe(
+          "Timeout in milliseconds for the response (default: 15000, max: 120000). Increase for long-running operations like decompiling many modules."
+        )
+        .optional()
+        .default(15000),
     }),
   },
-  async ({ code, threadContext }) => {
+  async ({ code, threadContext, timeout }) => {
     console.error(`Executing code in thread ${threadContext}...`);
+
+    const clampedTimeout = Math.min(Math.max(timeout, 1000), 120000);
 
     const toolCallId = SendArbitraryDataToClient("get-data-by-code", {
       source: `setthreadidentity(${threadContext});${code}`,
@@ -2048,7 +2067,7 @@ server.registerTool(
       return INVALID_CLIENT_ERROR;
     }
 
-    const response = (await GetResponseOfIdFromClient(toolCallId)) as
+    const response = (await GetResponseOfIdFromClient(toolCallId, clampedTimeout)) as
       | {
         output: string;
       }
@@ -2256,12 +2275,29 @@ server.registerTool(
         )
         .optional()
         .default(20),
+      maxResults: z
+        .number()
+        .describe(
+          "Maximum total number of matches across ALL scripts (default: unlimited). Use this to cap total matches, e.g. maxResults=1 to find just the first match across all scripts."
+        )
+        .optional(),
+      literal: z
+        .boolean()
+        .describe(
+          "When true, treats the query as a plain literal string — no | (OR) or & (AND) splitting, no pattern matching. Equivalent to ripgrep's -F flag. (default: false)"
+        )
+        .optional()
+        .default(false),
     }),
   },
-  async ({ query, limit }) => {
+  async ({ query, limit, contextLines, maxMatchesPerScript, maxResults, literal }) => {
     const toolCallId = SendArbitraryDataToClient("search-scripts-sources", {
       query,
       limit,
+      contextLines,
+      maxMatchesPerScript,
+      maxResults,
+      literal,
     }, undefined, activeClientId);
 
     if (toolCallId === null) {

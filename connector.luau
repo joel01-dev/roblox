@@ -101,18 +101,36 @@ local BaseBridge = {}; do
     function BaseBridge:BindToType(type, callback)
         self.Callbacks[type] = callback
     end
-    
+
+    function BaseBridge:BindToTypeRaw(type, callback)
+        self.Callbacks[type] = callback
+        self.RawCallbacks = self.RawCallbacks or {}
+        self.RawCallbacks[type] = true
+    end
+
     function BaseBridge:HandleMessage(data)
         if self.Callbacks[data.type] then
             local success, result = pcall(function()
                 return self.Callbacks[data.type](data)
             end)
-    
+
             if success and result == nil then
                 return nil
             end
-    
-            return self:FormatResponse(result, data.id, not success)
+
+            if not success then
+                return self:FormatResponse(result, data.id, true)
+            end
+
+            if self.RawCallbacks and self.RawCallbacks[data.type] then
+                return {
+                    output = tostring(result),
+                    success = true,
+                    id = data.id
+                }
+            end
+
+            return self:FormatResponse(result, data.id, false)
         end
         return nil
     end
@@ -661,26 +679,57 @@ while true do
         return dataOutput
     end)
 
-    Bridge:BindToType("get-script-content", function(data)
+    Bridge:BindToTypeRaw("get-script-content", function(data)
+        local source
+
         --// Handle GC'd script proxies: debugId is passed directly, skip loadstring \\--
         if data.debugId then
-            local cached = ScriptSourcesMap[data.debugId]
-            assert(cached, "No cached source found for GC'd ScriptProxy with DebugId: " .. tostring(data.debugId))
-            return cached
+            source = ScriptSourcesMap[data.debugId]
+            assert(source, "No cached source found for GC'd ScriptProxy with DebugId: " .. tostring(data.debugId))
+        else
+            setthreadidentity(8)
+            local scriptInstance = loadstring(data.source)()
+
+            assert(typeof(scriptInstance) == "Instance", "Script instance is not an instance.")
+            assert(scriptInstance:IsA("LuaSourceContainer"), "Script instance is not a LuaSourceContainer (Script, LocalScript, or ModuleScript).")
+            assert(not (scriptInstance:IsA("Script") and scriptInstance.RunContext == Enum.RunContext.Server), "Script instance is a Server Script.")
+
+            if not ScriptSourcesMap[scriptInstance:GetDebugId()] then
+                MapScriptSource(scriptInstance)
+            end
+
+            source = ScriptSourcesMap[scriptInstance:GetDebugId()]
         end
 
-        setthreadidentity(8)
-        local scriptInstance = loadstring(data.source)()
+        --// Line range support \\--
+        if data.startLine then
+            local lines = {}
+            local pos = 1
+            local len = #source
+            while pos <= len do
+                local newlinePos = source:find("\n", pos, true)
+                if newlinePos then
+                    table.insert(lines, source:sub(pos, newlinePos - 1))
+                    pos = newlinePos + 1
+                else
+                    table.insert(lines, source:sub(pos))
+                    break
+                end
+            end
 
-        assert(typeof(scriptInstance) == "Instance", "Script instance is not an instance.")
-        assert(scriptInstance:IsA("LuaSourceContainer"), "Script instance is not a LuaSourceContainer (Script, LocalScript, or ModuleScript).")
-        assert(not (scriptInstance:IsA("Script") and scriptInstance.RunContext == Enum.RunContext.Server), "Script instance is a Server Script.")
+            local totalLines = #lines
+            local startLine = math.max(1, math.min(data.startLine, totalLines))
+            local endLine = data.endLine and math.max(startLine, math.min(data.endLine, totalLines)) or totalLines
 
-        if not ScriptSourcesMap[scriptInstance:GetDebugId()] then
-            MapScriptSource(scriptInstance)
+            local sliced = {}
+            for i = startLine, endLine do
+                table.insert(sliced, lines[i])
+            end
+
+            return "-- Lines " .. startLine .. "-" .. endLine .. " of " .. totalLines .. "\n" .. table.concat(sliced, "\n")
         end
 
-        return ScriptSourcesMap[scriptInstance:GetDebugId()]
+        return source
     end)
 
     Bridge:BindToType("search-instances", function(data)
@@ -999,7 +1048,7 @@ while true do
         error("Remote not found: " .. remoteName .. " in " .. direction .. " logs. Make sure the remote has been logged at least once.")
     end)
 
-    Bridge:BindToType("search-scripts-sources", function(data)
+    Bridge:BindToTypeRaw("search-scripts-sources", function(data)
         --// If mapping was deferred, start it now and wait for it to finish \\--
         if not HasStartedMapping then
             StartScriptMapping()
@@ -1007,11 +1056,18 @@ while true do
 
         assert(ScriptSourcesMap.HasFinishedMapping, "The bridge is still mapping all script sources (" .. tostring(MappedSources) .. "/" .. tostring(SourcesToMap) .. ") please try again later.")
 
-        local stringMatchQueries = ParseQuery(data.query)
+        local isLiteral = data.literal == true
+        local stringMatchQueries
+        if isLiteral then
+            stringMatchQueries = { data.query }
+        else
+            stringMatchQueries = ParseQuery(data.query)
+        end
         local limit = data.limit or 50
         local contextLines = data.contextLines or 2
         local totalMatches = 0
         local maxMatchesPerScript = data.maxMatchesPerScript or 20
+        local maxResults = data.maxResults
 
         --// Pre-compute query info \\--
         local queryInfo = {}
@@ -1078,6 +1134,7 @@ while true do
         
         for _, scriptData in matchingScripts do
             if #results >= limit then break end
+            if maxResults and totalMatches >= maxResults then break end
             
             local debugId = scriptData.debugId
             local source = scriptData.source
@@ -1106,42 +1163,31 @@ while true do
 
             local function AddMatch(matchingLines, startLine, endLine, matchedContent)
                 EnsureLineInfo()
-                
-                local before = {}
+
+                local block = {}
                 for i = math.max(1, startLine - contextLines), startLine - 1 do
-                    table.insert(before, { lineNumber = i, content = lines[i] or "" })
+                    table.insert(block, string.format("  %d: %s", i, lines[i] or ""))
                 end
-                
-                local after = {}
+                for i = startLine, endLine do
+                    table.insert(block, string.format("> %d: %s", i, lines[i] or ""))
+                end
                 for i = endLine + 1, math.min(#lines, endLine + contextLines) do
-                    table.insert(after, { lineNumber = i, content = lines[i] or "" })
+                    table.insert(block, string.format("  %d: %s", i, lines[i] or ""))
                 end
-                
-                local content
-                if startLine == endLine then
-                    content = matchedContent or lines[startLine] or ""
-                else
-                    content = {}
-                    for i = startLine, endLine do
-                        table.insert(content, { lineNumber = i, content = lines[i] or "" })
-                    end
-                end
-                
-                table.insert(matchingLines, {
-                    lineNumber = startLine,
-                    endLineNumber = endLine,
-                    content = content,
-                    before = before,
-                    after = after
-                })
+
+                table.insert(matchingLines, table.concat(block, "\n"))
             end
 
             --// Find all matching lines \\--
             local matchingLines = {}
             local matchedPositions = {}
-            
+            local effectiveCap = maxMatchesPerScript
+            if maxResults then
+                effectiveCap = math.min(effectiveCap, maxResults - totalMatches)
+            end
+
             for idx, query in stringMatchQueries do
-                if #matchingLines >= maxMatchesPerScript then break end
+                if #matchingLines >= effectiveCap then break end
                 
                 local info = queryInfo[idx]
                 
@@ -1149,7 +1195,7 @@ while true do
                     EnsureLineInfo()
 
                     local searchStart = 1
-                    while #matchingLines < maxMatchesPerScript do
+                    while #matchingLines < effectiveCap do
                         local matchStart, matchEnd
                         
                         if info.isLogicalAND then
@@ -1188,7 +1234,7 @@ while true do
                 else
                     
                     local searchStart = 1
-                    while #matchingLines < maxMatchesPerScript do
+                    while #matchingLines < effectiveCap do
                         local matchStart, matchEnd
                         
                         if info.isLogicalAND then
@@ -1243,22 +1289,19 @@ while true do
             if #matchingLines == 0 then continue end
 
             local scriptRef = GetScriptByDebugId(debugId)
-            local scriptPath = scriptRef and scriptRef or "<ScriptProxy: " .. debugId .. ">"
+            local scriptPath = scriptRef and scriptRef:GetFullName() or "<ScriptProxy: " .. debugId .. ">"
 
             totalMatches += #matchingLines
-            table.insert(results, {
-                Script = scriptPath,
-                MatchCount = #matchingLines,
-                Matches = matchingLines
-            })
+            local scriptBlock = "[" .. scriptPath .. "] " .. #matchingLines .. (#matchingLines == 1 and " match" or " matches") .. "\n\n" .. table.concat(matchingLines, "\n\n")
+            table.insert(results, scriptBlock)
         end
 
-        return {
-            count = #results,
-            totalMatches = totalMatches,
-            limited = #results >= limit,
-            results = results
-        }
+        local header = totalMatches .. " total " .. (totalMatches == 1 and "match" or "matches") .. " across " .. #results .. (#results == 1 and " script" or " scripts")
+        if #results >= limit or (maxResults and totalMatches >= maxResults) then
+            header = header .. " (results limited)"
+        end
+
+        return header .. "\n\n" .. table.concat(results, "\n\n---\n\n")
     end)
 
     Bridge:BindToType("type-text-box", function(data)
