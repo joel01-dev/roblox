@@ -6,6 +6,16 @@
 
 An MCP server that allows Agents to interact with a running Roblox game client — execute code, inspect scripts, spy on remotes, and more.
 
+## Dashboard
+
+Roblox Executor MCP includes a local web dashboard at:
+
+```text
+http://localhost:16384/
+```
+
+Use it to see connected Roblox clients, inspect scripts, run tools, view server logs, configure semantic search, and index games for semantic script search.
+
 ## Features
 
 - **Code Execution** — Run Lua code and fetch data from the game client.
@@ -14,7 +24,7 @@ An MCP server that allows Agents to interact with a running Roblox game client �
 - **Remote Spy** — Intercept, log, block, and ignore Remotes/Bindables via [Cobalt](https://github.com/notpoiu/cobalt).
 - **GUI Interaction** — Click buttons and type into text boxes.
 - **Screenshot** — Capture Roblox window screenshots (Windows only).
-- **Multi-Client** — Connect multiple Roblox clients at once. Dashboard at `http://localhost:16384/`.
+- **Multi-Client** — Connect multiple Roblox clients at once.
 - **Primary / Secondary** — Multiple MCP instances auto-coordinate with automatic promotion. Supports remote relaying via `--baseurl`. See [Advanced](docs/advanced.md).
 
 ## Prerequisites
@@ -73,6 +83,12 @@ loadstring(game:HttpGet("http://" .. bridgeUrl .. "/script.luau"))()
 getgenv().BridgeURL = "10.0.0.4:16384"                  -- default: localhost:16384
 getgenv().DisableWebSocket = true                        -- force HTTP polling
 getgenv().DisableInitialScriptDecompMapping = true       -- skip initial decompilation
+```
+
+After the MCP server starts and Roblox connects, open the dashboard:
+
+```text
+http://localhost:16384/
 ```
 
 ## Community
