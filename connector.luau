@@ -998,7 +998,9 @@ while true do
 
     Bridge:BindToType("execute", function(data)
         setthreadidentity(8)
-        loadstring(data.source)()
+        task.defer(function()
+            loadstring(data.source)()
+        end)
     end)
 
     Bridge:BindToType("get-console-output", function(data)
