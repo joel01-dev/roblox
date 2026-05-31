@@ -5,7 +5,7 @@
 In Antigravity, open the command palette (`Ctrl+Shift+P` / `Cmd+Shift+P`) and search for **"Antigravity: Manage MCP Servers"**, or manually edit the config file:
 
 - **macOS:** `~/.gemini/antigravity/mcp_config.json`
-- **Windows:** `%USERPROFILE%\.gemini\antigravity\mcp_config.json`
+- **Windows:** `%USERPROFILE%\.gemini\config\mcp_config.json`
 - **Linux:** `~/.gemini/antigravity/mcp_config.json`
 
 ## 2. Add the MCP server

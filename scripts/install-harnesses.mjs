@@ -29,7 +29,7 @@ const ALL_HARNESSES = [
   { id: "claude-code", name: "Claude Code", group: "Recommended", config: { kind: "claudeCli" } },
   { id: "opencode", name: "OpenCode", group: "Recommended", config: { kind: "opencodeJson", path: homePath(".config", "opencode", "opencode.json") } },
   { id: "cursor", name: "Cursor", group: "Recommended", config: { kind: "mcpServersJson", path: homePath(".cursor", "mcp.json") } },
-  { id: "antigravity", name: "Antigravity", group: "Recommended", config: { kind: "mcpServersJson", path: homePath(".gemini", "antigravity", "mcp_config.json") } },
+  { id: "antigravity", name: "Antigravity", group: "Recommended", config: { kind: "mcpServersJson", path: antigravityConfigPath() } },
   { id: "gemini-cli", name: "Gemini CLI", group: "Recommended", config: { kind: "mcpServersJson", path: homePath(".gemini", "settings.json"), extra: { trust: true } } },
   { id: "github-copilot", name: "GitHub Copilot", group: "Recommended", config: { kind: "mcpServersJson", path: homePath(".copilot", "mcp-config.json") } },
   { id: "vscode-copilot", name: "VS Code Copilot", group: "Recommended", config: { kind: "vscodeCli" } },
@@ -1007,6 +1007,13 @@ function spawnCommand(command) {
 
 function homePath(...parts) {
   return path.join(os.homedir(), ...parts);
+}
+
+function antigravityConfigPath() {
+  if (process.platform === "win32") {
+    return homePath(".gemini", "config", "mcp_config.json");
+  }
+  return homePath(".gemini", "antigravity", "mcp_config.json");
 }
 
 function expandHome(value) {
