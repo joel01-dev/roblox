@@ -964,6 +964,7 @@ function progressBar(step) {
 async function readJson(filePath, fallback) {
   if (!exists(filePath)) return structuredClone(fallback);
   const raw = await fs.readFile(filePath, "utf8");
+  if (!raw.trim()) return structuredClone(fallback);
   try {
     return JSON.parse(stripJsonComments(raw));
   } catch (error) {
