@@ -129,11 +129,13 @@ const NON_INTERACTIVE = process.argv.includes("--yes") || process.argv.includes(
 const DRY_RUN = process.argv.includes("--dry-run");
 const UPDATE_MODE = process.argv.includes("--update");
 const GET_SCRIPT_MODE = process.argv.includes("--get-script");
-const ASCII_MODE = process.platform === "win32" || process.argv.includes("--ascii");
+const FORCE_ASCII_MODE = process.argv.includes("--ascii");
+const ASCII_MODE = FORCE_ASCII_MODE || !terminalCanRenderUnicode();
 const PLAIN_MODE = process.argv.includes("--plain");
 const NO_OPENTUI = process.argv.includes("--no-opentui");
 const SHOW_ALL_HARNESSES = process.argv.includes("--show-all-harnesses") || process.argv.includes("--all-harnesses");
 const AUTOEXEC_MODE = process.argv.includes("--autoexec");
+installSafeTerminalWrites();
 const HARNESS_AVAILABILITY = detectAvailableHarnesses();
 if (PLAIN_MODE || process.env.NO_COLOR) {
   for (const key of Object.keys(colors)) {
@@ -290,7 +292,7 @@ async function maybeInstallAutoexec(loaderSnippet) {
 }
 
 async function selectAutoexecTargets(targets) {
-  if (!PLAIN_MODE && !NO_OPENTUI && process.stdin.isTTY && process.stdout.isTTY && process.versions.bun) {
+  if (canUseRichPrompts()) {
     try {
       return await selectAutoexecTargetsOpenTui(targets);
     } catch (error) {
@@ -1742,7 +1744,7 @@ async function runForeground(command, args, options = {}) {
 }
 
 async function selectHarnesses(initial) {
-  if (PLAIN_MODE || NO_OPENTUI || !process.stdin.isTTY || !process.stdout.isTTY) {
+  if (!canUseRichPrompts()) {
     return selectHarnessesPlain(initial);
   }
 
@@ -2479,7 +2481,7 @@ async function selectHarnessesPlain(initial) {
 }
 
 async function askInput(label, fallback) {
-  if (!PLAIN_MODE && !NO_OPENTUI && process.stdin.isTTY && process.stdout.isTTY && process.versions.bun) {
+  if (canUseRichPrompts()) {
     try {
       return await askInputOpenTui(label, fallback);
     } catch (error) {
@@ -2495,7 +2497,7 @@ async function askInput(label, fallback) {
 }
 
 async function askYesNo(label, fallback) {
-  if (!PLAIN_MODE && !NO_OPENTUI && process.stdin.isTTY && process.stdout.isTTY && process.versions.bun) {
+  if (canUseRichPrompts()) {
     try {
       return await askYesNoOpenTui(label, fallback);
     } catch (error) {
@@ -2511,7 +2513,7 @@ async function askYesNo(label, fallback) {
 }
 
 async function askChoice(label, options, fallbackKey) {
-  if (!PLAIN_MODE && !NO_OPENTUI && process.stdin.isTTY && process.stdout.isTTY && process.versions.bun) {
+  if (canUseRichPrompts()) {
     try {
       return await askChoiceOpenTui(label, options, fallbackKey);
     } catch (error) {
@@ -3295,6 +3297,67 @@ function spawnCommand(command) {
   if (command.endsWith(".cmd") || command.endsWith(".exe")) return command;
   if (["npm", "pnpm", "yarn", "code", "claude"].includes(command)) return `${command}.cmd`;
   return command;
+}
+
+function canUseRichPrompts() {
+  if (PLAIN_MODE || NO_OPENTUI) return false;
+  if (!process.stdin.isTTY || !process.stdout.isTTY || !process.versions.bun) return false;
+  return true;
+}
+
+function terminalCanRenderUnicode() {
+  if (process.platform !== "win32") return true;
+  if (hasModernWindowsTerminal()) return true;
+
+  const codePage = spawnSync("chcp", {
+    encoding: "utf8",
+    shell: true,
+    windowsHide: true,
+  });
+  const output = `${codePage.stdout || ""} ${codePage.stderr || ""}`;
+  return /\b65001\b/.test(output);
+}
+
+function hasModernWindowsTerminal() {
+  if (process.platform !== "win32") return true;
+  return Boolean(
+    process.env.WT_SESSION ||
+    process.env.TERM_PROGRAM ||
+    process.env.ConEmuANSI === "ON" ||
+    process.env.ANSICON ||
+    process.env.MSYSTEM
+  );
+}
+
+function installSafeTerminalWrites() {
+  if (!ASCII_MODE) return;
+  patchTerminalWrite(process.stdout);
+  patchTerminalWrite(process.stderr);
+}
+
+function patchTerminalWrite(stream) {
+  if (!stream || stream.__robloxMcpAsciiPatched) return;
+  const originalWrite = stream.write.bind(stream);
+  stream.write = (chunk, encoding, callback) => {
+    if (typeof encoding === "function") {
+      callback = encoding;
+      encoding = undefined;
+    }
+    if (typeof chunk === "string") {
+      chunk = replaceUnsupportedTerminalCharacters(chunk);
+    } else if (Buffer.isBuffer(chunk)) {
+      chunk = Buffer.from(replaceUnsupportedTerminalCharacters(chunk.toString("utf8")), "utf8");
+    }
+    return originalWrite(chunk, encoding, callback);
+  };
+  Object.defineProperty(stream, "__robloxMcpAsciiPatched", {
+    value: true,
+    configurable: true,
+  });
+}
+
+function replaceUnsupportedTerminalCharacters(value) {
+  return String(value).replace(/[^\x00-\x7F]/g, "?");
 }
 
 function getArgValue(flag) {
