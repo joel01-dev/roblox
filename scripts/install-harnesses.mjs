@@ -677,13 +677,8 @@ function autoexecTargetKey(target) {
 async function promptForGetScriptBridgeUrl() {
   if (NON_INTERACTIVE) return DEFAULT_BRIDGE_URL;
 
-  const shouldUseLan = await askYesNo("Use local machine IP instead of localhost", false);
-  if (!shouldUseLan) return DEFAULT_BRIDGE_URL;
-
-  const detectedIp = getLocalLanIp();
-  const fallbackIp = detectedIp || "127.0.0.1";
-  const ip = await askInput("Local machine IP for Roblox to reach", fallbackIp);
-  return normalizeBridgeUrl(ip);
+  const target = await promptForBridgeTarget("Roblox connection for loader");
+  return target.bridgeUrl;
 }
 
 async function runUpdateMode() {
@@ -1034,16 +1029,11 @@ async function setupOllama(results) {
 }
 
 async function configureCrossMachineSetup() {
-  const shouldUseLan = await askYesNo("Set up for Roblox on another machine on this network", false);
-  if (!shouldUseLan) return null;
-
-  const detectedIp = getLocalLanIp();
-  const fallbackIp = detectedIp || "127.0.0.1";
-  const ip = await askInput("Local machine IP for Roblox to reach (press Enter to use detected LAN IP)", fallbackIp);
-  const bridgeUrl = normalizeBridgeUrl(ip);
+  const target = await promptForBridgeTarget("How should Roblox reach this MCP server");
+  if (target.mode === "current") return null;
 
   let firewallStatus = null;
-  const firewallPlan = getFirewallPlan();
+  const firewallPlan = target.needsFirewall ? getFirewallPlan() : null;
   if (firewallPlan) {
     const shouldPatchFirewall = await askYesNo(
       `Allow inbound TCP ${SERVER_PORT} through the firewall`,
@@ -1069,7 +1059,63 @@ async function configureCrossMachineSetup() {
     };
   }
 
-  return { bridgeUrl, firewallStatus };
+  return { bridgeUrl: target.bridgeUrl, firewallStatus };
+}
+
+async function promptForBridgeTarget(label) {
+  const lanIp = getLocalLanIp();
+  const tailscaleIp = getTailscaleIp();
+  const options = [
+    {
+      key: "1",
+      aliases: ["current", "this", "computer", "localhost"],
+      mode: "current",
+      title: "This computer",
+      bridgeUrl: DEFAULT_BRIDGE_URL,
+      needsFirewall: false,
+      detail: DEFAULT_BRIDGE_URL,
+    },
+    {
+      key: "2",
+      aliases: ["local", "network", "lan", "wifi", "local-network"],
+      mode: "network",
+      title: "Local network",
+      bridgeUrl: normalizeBridgeUrl(lanIp || "127.0.0.1"),
+      needsFirewall: true,
+      detail: lanIp ? normalizeBridgeUrl(lanIp) : "manual address",
+    },
+    {
+      key: "3",
+      aliases: ["tailscale", "tailnet", "authorized", "authorized-machines"],
+      mode: "tailscale",
+      title: "Tailscale",
+      bridgeUrl: tailscaleIp ? normalizeBridgeUrl(tailscaleIp) : "",
+      needsFirewall: false,
+      detail: tailscaleIp ? normalizeBridgeUrl(tailscaleIp) : "manual address",
+    },
+  ];
+
+  const answer = await askChoice(label, options, "1");
+  const choice = findBridgeTargetOption(options, answer);
+  if (choice.mode === "current") return choice;
+
+  const fallback = choice.bridgeUrl || (choice.mode === "tailscale" ? "" : DEFAULT_BRIDGE_URL);
+  const address = await askInput(`${choice.title} bridge address`, fallback);
+  if (choice.mode === "tailscale" && !String(address || "").trim()) {
+    log("warn", "No Tailscale address entered. Falling back to this computer.");
+    return options[0];
+  }
+  return {
+    ...choice,
+    bridgeUrl: normalizeBridgeUrl(address || fallback),
+  };
+}
+
+function findBridgeTargetOption(options, value) {
+  const raw = String(value || "").trim().toLowerCase();
+  return options.find((option) => {
+    return option.key === raw || option.aliases.includes(raw) || option.mode === raw;
+  }) || options[0];
 }
 
 function getLocalLanIp() {
@@ -1082,6 +1128,38 @@ function getLocalLanIp() {
     }
   }
   return candidates.find((ip) => /^10\./.test(ip) || /^192\.168\./.test(ip) || /^172\.(1[6-9]|2\d|3[0-1])\./.test(ip)) || candidates[0] || null;
+}
+
+function getTailscaleIp() {
+  const binary = findTailscaleBinary();
+  if (!binary) return null;
+  const result = spawnSync(binary, ["ip", "-4"], {
+    encoding: "utf8",
+    stdio: "pipe",
+    shell: false,
+  });
+  if (result.status !== 0) return null;
+  const ip = result.stdout.split(/\r?\n/).map((line) => line.trim()).find(Boolean);
+  return ip || null;
+}
+
+function findTailscaleBinary() {
+  const command = process.platform === "win32" ? "tailscale.exe" : "tailscale";
+  const fromPath = findOnPath(command);
+  if (fromPath) return fromPath;
+  const candidates = process.platform === "darwin"
+    ? [
+        "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+        "/opt/homebrew/bin/tailscale",
+        "/usr/local/bin/tailscale",
+      ]
+    : process.platform === "win32"
+      ? [
+          "C:\\Program Files\\Tailscale\\tailscale.exe",
+          "C:\\Program Files (x86)\\Tailscale\\tailscale.exe",
+        ]
+      : ["/usr/bin/tailscale", "/usr/local/bin/tailscale"];
+  return candidates.find((filePath) => exists(filePath)) || null;
 }
 
 async function copyToClipboard(text) {
@@ -2410,7 +2488,8 @@ async function askInput(label, fallback) {
   }
 
   showCursor();
-  const answer = await prompt(`${colors.bold}${label}${colors.reset} ${colors.gray}(${fallback})${colors.reset}: `);
+  const fallbackText = fallback ? ` ${colors.gray}(${fallback})${colors.reset}` : "";
+  const answer = await prompt(`${colors.bold}${label}${colors.reset}${fallbackText}: `);
   hideCursor();
   return answer.trim() || fallback;
 }
@@ -2429,6 +2508,25 @@ async function askYesNo(label, fallback) {
   hideCursor();
   if (!answer.trim()) return fallback;
   return /^y(es)?$/i.test(answer.trim());
+}
+
+async function askChoice(label, options, fallbackKey) {
+  if (!PLAIN_MODE && !NO_OPENTUI && process.stdin.isTTY && process.stdout.isTTY && process.versions.bun) {
+    try {
+      return await askChoiceOpenTui(label, options, fallbackKey);
+    } catch (error) {
+      log("warn", `OpenTUI choice prompt unavailable: ${error.message || error}`);
+    }
+  }
+
+  console.log(`\n${colors.cyan}${label}:${colors.reset}`);
+  for (const option of options) {
+    console.log(`  ${option.key}. ${option.title} ${colors.gray}${option.detail}${colors.reset}`);
+  }
+  showCursor();
+  const answer = await prompt(`${colors.bold}Choice${colors.reset} ${colors.gray}(${fallbackKey})${colors.reset}: `);
+  hideCursor();
+  return answer.trim() || fallbackKey;
 }
 
 async function askYesNoOpenTui(label, fallback) {
@@ -2606,6 +2704,180 @@ function dialogButton(Text, palette, label, active) {
     height: 1,
     truncate: true,
   });
+}
+
+async function askChoiceOpenTui(label, options, fallbackKey) {
+  const { Box, Text, createCliRenderer } = await loadOpenTui();
+  const palette = {
+    bg: "#050505",
+    panel: "#171717",
+    panelDark: "#101010",
+    text: "#E7E7E7",
+    muted: "#8E8E8E",
+    dim: "#626262",
+    blue: "#62A0FF",
+    peach: "#F4B183",
+  };
+  const fallbackIndex = Math.max(0, options.findIndex((option) => option.key === fallbackKey));
+  const state = {
+    index: fallbackIndex,
+  };
+
+  return await new Promise((resolve, reject) => {
+    let settled = false;
+    let renderer;
+    const cleanup = () => {
+      if (settled) return;
+      settled = true;
+      if (renderer) renderer.destroy();
+    };
+    const finish = (key) => {
+      cleanup();
+      resolve(key);
+    };
+    const render = () => {
+      if (!renderer || settled) return;
+      const viewportWidth = Math.max(70, Number(renderer.width || process.stdout.columns) || 110);
+      const viewportHeight = Math.max(22, Number(renderer.height || process.stdout.rows) || 30);
+      const dialogWidth = Math.max(64, Math.min(100, viewportWidth - 8));
+      const dialogHeight = 16;
+      const topPad = Math.max(1, Math.floor((viewportHeight - dialogHeight) / 2));
+      const sidePad = Math.max(0, Math.floor((viewportWidth - dialogWidth) / 2));
+      const selected = options[state.index] || options[fallbackIndex] || options[0];
+
+      if (renderer.root.getRenderable("choice-dialog-root")) renderer.root.remove("choice-dialog-root");
+      renderer.root.add(
+        Box(
+          {
+            id: "choice-dialog-root",
+            width: "100%",
+            height: "100%",
+            backgroundColor: palette.bg,
+            flexDirection: "column",
+          },
+          Box({ height: topPad, width: "100%", backgroundColor: palette.bg }),
+          Box(
+            {
+              width: "100%",
+              height: dialogHeight,
+              flexDirection: "row",
+              backgroundColor: palette.bg,
+            },
+            Box({ width: sidePad, height: "100%", backgroundColor: palette.bg }),
+            Box(
+              {
+                width: dialogWidth,
+                height: "100%",
+                backgroundColor: palette.panel,
+                flexDirection: "row",
+              },
+              Box({ width: 1, height: "100%", backgroundColor: palette.blue }),
+              Box(
+                {
+                  flexGrow: 1,
+                  height: "100%",
+                  paddingX: 2,
+                  paddingY: 1,
+                  flexDirection: "column",
+                },
+                Box(
+                  {
+                    width: "100%",
+                    height: 2,
+                    flexDirection: "column",
+                    backgroundColor: palette.panel,
+                  },
+                  Box(
+                    {
+                      width: "100%",
+                      height: 1,
+                      flexDirection: "row",
+                      backgroundColor: palette.panel,
+                    },
+                    Text({ content: "Roblox Connection", fg: palette.text, attributes: 1, height: 1, truncate: true }),
+                    Box({ flexGrow: 1, height: 1, backgroundColor: palette.panel }),
+                    Text({ content: "esc", fg: palette.muted, height: 1, truncate: true })
+                  ),
+                  Text({ content: "left/right or tab to choose   enter to confirm   1/2/3 works", fg: palette.dim, height: 1, truncate: true })
+                ),
+                Box({ height: 1 }),
+                Text({ content: label, fg: palette.text, attributes: 1, height: 1, truncate: true }),
+                Text({ content: selected ? `${selected.title}: ${selected.detail}` : "", fg: palette.muted, wrapMode: "word", height: 3 }),
+                Box({ flexGrow: 1 }),
+                Box(
+                  {
+                    width: "100%",
+                    height: 1,
+                    flexDirection: "row",
+                    backgroundColor: palette.panel,
+                  },
+                  Box({ flexGrow: 1, height: 1, backgroundColor: palette.panel }),
+                  ...choiceButtons(Text, palette, options, state.index)
+                )
+              )
+            )
+          )
+        )
+      );
+      renderer.requestRender();
+    };
+    const onKey = (key) => {
+      if (settled) return;
+      if (key.name === "c" && key.ctrl) {
+        cleanup();
+        process.exit(130);
+      }
+      if (key.name === "left") {
+        state.index = (state.index - 1 + options.length) % options.length;
+      } else if (key.name === "right" || key.name === "tab") {
+        state.index = (state.index + 1) % options.length;
+      } else if (key.name === "return") {
+        finish((options[state.index] || options[fallbackIndex] || options[0]).key);
+        return;
+      } else if (key.name === "escape" || key.name === "q") {
+        finish(fallbackKey);
+        return;
+      } else if (key.sequence) {
+        const directIndex = options.findIndex((option) => option.key === key.sequence);
+        if (directIndex !== -1) {
+          finish(options[directIndex].key);
+          return;
+        }
+      }
+      render();
+    };
+
+    createCliRenderer({
+      exitOnCtrlC: false,
+      clearOnShutdown: true,
+      screenMode: "alternate-screen",
+      consoleMode: "disabled",
+      backgroundColor: palette.bg,
+      targetFps: 30,
+    }).then((created) => {
+      if (settled) {
+        created.destroy();
+        return;
+      }
+      renderer = created;
+      renderer.keyInput.on("keypress", onKey);
+      renderer.on("resize", render);
+      hideCursor();
+      render();
+    }).catch((error) => {
+      cleanup();
+      reject(error);
+    });
+  });
+}
+
+function choiceButtons(Text, palette, options, activeIndex) {
+  const nodes = [];
+  for (let index = 0; index < options.length; index += 1) {
+    if (index > 0) nodes.push(Text({ content: "  ", fg: palette.muted, bg: palette.panel, height: 1 }));
+    nodes.push(dialogButton(Text, palette, options[index].title, index === activeIndex));
+  }
+  return nodes;
 }
 
 async function askInputOpenTui(label, fallback = "") {
@@ -2788,6 +3060,22 @@ async function askInputOpenTui(label, fallback = "") {
 }
 
 function inputDialogCopy(label, fallback) {
+  if (/Connection target/i.test(label)) {
+    return {
+      title: "Roblox Connection",
+      message: "How should Roblox reach this MCP server?",
+      detail: "Type 1 for this computer, 2 for local network, or 3 for Tailscale authorized machines.",
+    };
+  }
+  if (/bridge address/i.test(label)) {
+    return {
+      title: "Bridge Address",
+      message: label,
+      detail: fallback
+        ? `Press Enter to use ${fallback}, or type another host:port address.`
+        : "Type the host:port address for this connection path.",
+    };
+  }
   if (/Local machine IP|LAN IP|Roblox to reach/i.test(label)) {
     return {
       title: "Roblox Connection",
