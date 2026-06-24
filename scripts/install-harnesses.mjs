@@ -130,7 +130,8 @@ const DRY_RUN = process.argv.includes("--dry-run");
 const UPDATE_MODE = process.argv.includes("--update");
 const GET_SCRIPT_MODE = process.argv.includes("--get-script");
 const FORCE_ASCII_MODE = process.argv.includes("--ascii");
-const ASCII_MODE = FORCE_ASCII_MODE || !terminalCanRenderUnicode();
+const LEGACY_WINDOWS_CONSOLE = process.platform === "win32" && !hasModernWindowsTerminal();
+const ASCII_MODE = FORCE_ASCII_MODE || LEGACY_WINDOWS_CONSOLE || !terminalCanRenderUnicode();
 const PLAIN_MODE = process.argv.includes("--plain");
 const NO_OPENTUI = process.argv.includes("--no-opentui");
 const SHOW_ALL_HARNESSES = process.argv.includes("--show-all-harnesses") || process.argv.includes("--all-harnesses");
@@ -573,14 +574,7 @@ async function selectAutoexecTargetsOpenTui(targets) {
       render();
     };
 
-    createCliRenderer({
-      exitOnCtrlC: false,
-      clearOnShutdown: true,
-      screenMode: "alternate-screen",
-      consoleMode: "disabled",
-      backgroundColor: ui.bg,
-      targetFps: 30,
-    }).then((created) => {
+    createCliRenderer(openTuiRendererConfig(ui.bg)).then((created) => {
       if (settled) {
         created.destroy();
         return;
@@ -799,6 +793,17 @@ async function ensureUpdateGitReady(serverRoot, results) {
 }
 
 async function maybeInstallGit(results) {
+  if (process.platform === "win32" && !commandExists("winget")) {
+    const installedWinget = await maybeInstallWinget(results);
+    if (!installedWinget) {
+      results.push({
+        status: "warn",
+        message: "Git is not installed and winget is unavailable, so automatic Git installation cannot continue.",
+      });
+      return false;
+    }
+  }
+
   const plan = getGitInstallPlan();
   if (!plan) {
     results.push({
@@ -830,6 +835,50 @@ async function maybeInstallGit(results) {
 
   results.push({ status: "ok", message: "Git is installed." });
   return true;
+}
+
+async function maybeInstallWinget(results) {
+  const shouldInstall =
+    NON_INTERACTIVE || await askYesNo("winget is not installed. Install Windows Package Manager now", true);
+  if (!shouldInstall) {
+    results.push({ status: "warn", message: "winget is not installed; skipping automatic Git installation." });
+    return false;
+  }
+
+  const plan = getWingetInstallPlan();
+  await runForeground(plan.command, plan.args, {
+    label: `Installing ${plan.label}`,
+    cwd: CURRENT_REPO_DIR,
+  });
+
+  if (!commandExists("winget")) {
+    results.push({
+      status: "warn",
+      message: "Windows Package Manager installer finished, but winget is still not available in PATH. Restart the terminal and run update again.",
+    });
+    return false;
+  }
+
+  results.push({ status: "ok", message: "Windows Package Manager is installed." });
+  return true;
+}
+
+function getWingetInstallPlan() {
+  const script = [
+    "$ErrorActionPreference = 'Stop'",
+    "try { Add-AppxPackage -RegisterByFamilyName -MainPackage Microsoft.DesktopAppInstaller_8wekyb3d8bbwe } catch { Write-Host \"App Installer registration skipped: $($_.Exception.Message)\" }",
+    "if (Get-Command winget -ErrorAction SilentlyContinue) { exit 0 }",
+    "$bundle = Join-Path $env:TEMP 'Microsoft.DesktopAppInstaller_8wekyb3d8bbwe.msixbundle'",
+    "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12",
+    "Invoke-WebRequest -Uri 'https://aka.ms/getwinget' -OutFile $bundle -UseBasicParsing",
+    "Add-AppxPackage -Path $bundle",
+    "if (-not (Get-Command winget -ErrorAction SilentlyContinue)) { throw 'winget was installed, but winget.exe is not available in PATH yet.' }",
+  ].join("; ");
+  return {
+    label: "Windows Package Manager",
+    command: "powershell.exe",
+    args: ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
+  };
 }
 
 function getGitInstallPlan() {
@@ -2011,14 +2060,7 @@ async function selectHarnessesOpenTui(initial) {
       render();
     };
 
-    createCliRenderer({
-      exitOnCtrlC: false,
-      clearOnShutdown: true,
-      screenMode: "alternate-screen",
-      consoleMode: "disabled",
-      backgroundColor: ui.bg,
-      targetFps: 30,
-    }).then((created) => {
+    createCliRenderer(openTuiRendererConfig(ui.bg)).then((created) => {
       if (settled) {
         created.destroy();
         return;
@@ -2673,14 +2715,7 @@ async function askYesNoOpenTui(label, fallback) {
       render();
     };
 
-    createCliRenderer({
-      exitOnCtrlC: false,
-      clearOnShutdown: true,
-      screenMode: "alternate-screen",
-      consoleMode: "disabled",
-      backgroundColor: palette.bg,
-      targetFps: 30,
-    }).then((created) => {
+    createCliRenderer(openTuiRendererConfig(palette.bg)).then((created) => {
       if (settled) {
         created.destroy();
         return;
@@ -2849,14 +2884,7 @@ async function askChoiceOpenTui(label, options, fallbackKey) {
       render();
     };
 
-    createCliRenderer({
-      exitOnCtrlC: false,
-      clearOnShutdown: true,
-      screenMode: "alternate-screen",
-      consoleMode: "disabled",
-      backgroundColor: palette.bg,
-      targetFps: 30,
-    }).then((created) => {
+    createCliRenderer(openTuiRendererConfig(palette.bg)).then((created) => {
       if (settled) {
         created.destroy();
         return;
@@ -3037,14 +3065,7 @@ async function askInputOpenTui(label, fallback = "") {
       render();
     };
 
-    createCliRenderer({
-      exitOnCtrlC: false,
-      clearOnShutdown: true,
-      screenMode: "alternate-screen",
-      consoleMode: "disabled",
-      backgroundColor: palette.bg,
-      targetFps: 30,
-    }).then((created) => {
+    createCliRenderer(openTuiRendererConfig(palette.bg)).then((created) => {
       if (settled) {
         created.destroy();
         return;
@@ -3303,6 +3324,25 @@ function canUseRichPrompts() {
   if (PLAIN_MODE || NO_OPENTUI) return false;
   if (!process.stdin.isTTY || !process.stdout.isTTY || !process.versions.bun) return false;
   return true;
+}
+
+function openTuiRendererConfig(backgroundColor) {
+  const compatibilityMode = ASCII_MODE || LEGACY_WINDOWS_CONSOLE;
+  return {
+    exitOnCtrlC: false,
+    clearOnShutdown: !compatibilityMode,
+    screenMode: compatibilityMode ? "main-screen" : "alternate-screen",
+    consoleMode: "disabled",
+    backgroundColor,
+    targetFps: 30,
+    ...(compatibilityMode
+      ? {
+        enableMouseMovement: false,
+        useMouse: false,
+        useKittyKeyboard: null,
+      }
+      : {}),
+  };
 }
 
 function terminalCanRenderUnicode() {
