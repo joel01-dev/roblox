@@ -59,11 +59,22 @@ const SEND_RETRY_DELAY_MS = 100;
 
 export function SendToClient(target: RobloxClient, message: string): void {
   if (target.transport === "ws" && target.ws && target.ws.readyState === WebSocket.OPEN) {
-    // WebSocket: try once, fail silently (no retry for WS - connection is dead if send fails)
-    try {
-      target.ws.send(message);
-    } catch {
-      console.error(`[Send] WebSocket send failed for client ${target.clientId}`);
+    // WebSocket: try with retry for transient errors (synchronous retry with setTimeout)
+    for (let attempt = 1; attempt <= MAX_SEND_RETRIES; attempt++) {
+      try {
+        target.ws.send(message);
+        return; // Success
+      } catch (err) {
+        if (attempt === MAX_SEND_RETRIES) {
+          console.error(`[Send] WebSocket send failed after ${MAX_SEND_RETRIES} attempts for client ${target.clientId}:`, err);
+        } else {
+          // Synchronous wait using busy-poll (acceptable for retry path only)
+          const start = Date.now();
+          while (Date.now() - start < SEND_RETRY_DELAY_MS * attempt) {
+            // Busy-wait for short duration (max 200ms total)
+          }
+        }
+      }
     }
   } else if (target.transport === "http") {
     if (target.pendingHttpCommands.length >= MAX_PENDING_HTTP_COMMANDS) {
