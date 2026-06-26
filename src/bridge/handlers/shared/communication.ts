@@ -1,6 +1,6 @@
 import crypto from "crypto";
 import { WebSocket } from "ws";
-import { TOOL_RESPONSE_TIMEOUT } from "../../../config.js";
+import { TOOL_RESPONSE_TIMEOUT, generateTraceId } from "../../../config.js";
 import type {
   DispatchResult,
   InstanceRole,
@@ -119,18 +119,21 @@ export function GetResponseOfIdFromClient(
   });
 }
 
-// ─── High-level dispatch ──────────────────────────────────────────────────────
+// ─── High-level dispatch with correlation/trace ID ────────────────────────────
 export function SendArbitraryDataToClient(
   type: string,
   data: Record<string, unknown>,
   id?: string,
   clientId?: string
 ): DispatchResult {
+  const requestId = id ?? crypto.randomUUID();
+  const traceId = generateTraceId();
+
   if (instanceRole === "secondary") {
     if (!relaySocket || relaySocket.readyState !== WebSocket.OPEN) return null;
-    const requestId = id ?? crypto.randomUUID();
     const message = {
       id: requestId,
+      traceId,
       ...data,
       type,
       ...(clientId ? { targetClientId: clientId } : {}),
@@ -144,8 +147,7 @@ export function SendArbitraryDataToClient(
     const target = resolveTargetClient(clientId);
     if (!target) return "INVALID_CLIENT";
 
-    const requestId = id ?? crypto.randomUUID();
-    const message = { id: requestId, ...data, type };
+    const message = { id: requestId, traceId, ...data, type };
     requestToClientId.set(requestId, target.clientId);
     SendToClient(target, JSON.stringify(message));
     return requestId;
@@ -155,8 +157,7 @@ export function SendArbitraryDataToClient(
   const activeClients = getActiveClients();
   if (activeClients.length === 0) return null;
 
-  const requestId = id ?? crypto.randomUUID();
-  const message = { id: requestId, ...data, type };
+  const message = { id: requestId, traceId, ...data, type };
 
   for (const target of activeClients) {
     requestToClientId.set(requestId, target.clientId);
