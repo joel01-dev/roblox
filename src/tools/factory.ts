@@ -198,6 +198,10 @@ export interface SendAndWaitOptions {
   stampClient?: boolean;
 }
 
+// All tools now use "error" field for failures (unified in v2.1)
+// The connector returns { error: "msg" } on failure, { output: "result" } on success
+export const DEFAULT_FAILURE_FIELD: SendAndWaitOptions["failureField"] = "error";
+
 /**
  * Dispatch a request to the Roblox client and wait for the response.
  * Handles the no-client / invalid-client / timeout boilerplate that every

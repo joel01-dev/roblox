@@ -31,8 +31,7 @@ export function GET(req: IncomingMessage, res: ServerResponse, url: URL): void {
     return;
   }
 
-  client.pendingPollResolve?.([]);
-
+  //// Atomic swap: prevent race where a command arrives between resolve and setTimeout \\--
   let done = false;
   const finish = (commands: string[]): void => {
     if (done) return;
@@ -49,8 +48,9 @@ export function GET(req: IncomingMessage, res: ServerResponse, url: URL): void {
     sendCommands(res, commands);
   };
 
-  const timer = setTimeout(() => finish([]), HTTP_POLL_TIMEOUT);
+  // Set resolve BEFORE timer to close the race window
   client.pendingPollResolve = finish;
+  const timer = setTimeout(() => finish([]), HTTP_POLL_TIMEOUT);
 
   req.on("close", () => {
     if (done) return;
