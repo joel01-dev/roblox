@@ -884,15 +884,21 @@ local function MapScriptSource(script)
     })
 end
 
-MappedSourceLimiter = Ratelimiter.new({
-    Burst = {
-        Time = 0.5,
-        Max = 4,
-    },
+--// Parallel workers for script mapping (3x faster decompilation throughput) \\--
+local WORKER_COUNT = 3
+local MappedSourceLimiters = {}
 
-    MainCallback = MapScriptSource
-})
-MappedSourceLimiter:SetupManagerThread()
+for i = 1, WORKER_COUNT do
+    local limiter = Ratelimiter.new({
+        Burst = {
+            Time = 0.5,
+            Max = 4,
+        },
+        MainCallback = MapScriptSource
+    })
+    limiter:SetupManagerThread()
+    table.insert(MappedSourceLimiters, limiter)
+end
 
 local function GetScriptByDebugId(debugId)
     local CachedInstance = ScriptInstanceMap[debugId]
@@ -961,7 +967,10 @@ local function QueueScriptForMapping(script)
     SourcesToMap += 1
     ScriptMappingFinished = false
     PublishScriptMappingStatus(false)
-    MappedSourceLimiter:QueueOperation(script)
+    
+    --// Distribute round-robin across parallel workers (3x throughput) \\--
+    local workerIndex = (SourcesToMap % WORKER_COUNT) + 1
+    MappedSourceLimiters[workerIndex]:QueueOperation(script)
 end
 
 local function StartScriptMapping(clientId)
