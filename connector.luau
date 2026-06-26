@@ -354,6 +354,8 @@ local WebSocketBridge = setmetatable({}, {__index = BaseBridge}); do
         self.Connected = true
         self.Callbacks = {}
         self.ClientId = nil
+        self.MessageConnection = nil
+        self.CloseConnection = nil
 
         --// Send registration \\--
         self.WebSocket:Send(HttpService:JSONEncode(GetRegistrationInfo()))
@@ -385,7 +387,7 @@ local WebSocketBridge = setmetatable({}, {__index = BaseBridge}); do
         end)
     
         --// On Message \\--
-        self.WebSocket.OnMessage:Connect(function(message)
+        self.MessageConnection = self.WebSocket.OnMessage:Connect(function(message)
             local data = HttpService:JSONDecode(message)
 
             --// Handle registration response \\--
@@ -401,11 +403,40 @@ local WebSocketBridge = setmetatable({}, {__index = BaseBridge}); do
         end)
     
         --// On Close \\--
-        self.WebSocket.OnClose:Connect(function()
+        self.CloseConnection = self.WebSocket.OnClose:Connect(function()
             self.Connected = false
         end)
     
         return self
+    end
+    
+    function WebSocketBridge:Destroy()
+        --// Cleanup event connections to prevent memory leaks \\--
+        if self.MessageConnection then
+            self.MessageConnection:Disconnect()
+            self.MessageConnection = nil
+        end
+        
+        if self.CloseConnection then
+            self.CloseConnection:Disconnect()
+            self.CloseConnection = nil
+        end
+        
+        --// Cancel alive thread \\--
+        if self.AliveThread then
+            pcall(task.cancel, self.AliveThread)
+            self.AliveThread = nil
+        end
+        
+        --// Close WebSocket \\--
+        if self.WebSocket then
+            pcall(function()
+                self.WebSocket:Close()
+            end)
+            self.WebSocket = nil
+        end
+        
+        self.Connected = false
     end
     
     function WebSocketBridge:WaitForDisconnect()
