@@ -8,24 +8,9 @@ local BridgeURL = getgenv().BridgeURL or ... or "localhost:16384"
 
 --// Libraries \\--
 
--- Lua 5.1+ base64 v3.0 (c) 2009 by Alex Kloss <alexthkloss@web.de>
--- licensed under the terms of the LGPL2
-
--- character table string
-local b='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
-
--- encoding
-function base64_encode(data)
-    return ((data:gsub('.', function(x) 
-        local r,b='',x:byte()
-        for i=8,1,-1 do r=r..(b%2^i-b%2^(i-1)>0 and '1' or '0') end
-        return r;
-    end)..'0000'):gsub('%d%d%d?%d?%d?%d?', function(x)
-        if (#x < 6) then return '' end
-        local c=0
-        for i=1,6 do c=c+(x:sub(i,i)=='1' and 2^(6-i) or 0) end
-        return b:sub(c+1,c+1)
-    end)..({ '', '==', '=' })[#data%3+1])
+-- Use Roblox native Base64Encode (available since 2021)
+local function base64_encode(data)
+    return HttpService:Base64Encode(data)
 end
 
 --// Functions \\--
@@ -600,6 +585,9 @@ do
     Ratelimiter.QueueOperation = function(self, ...: any)
         if self.IsDestroyed then return end
         table.insert(self.Queue, table.pack(...))
+        if self.WakeEvent then
+            self.WakeEvent:Fire()
+        end
     end
 
     Ratelimiter.SetupManagerThread = function(self)
@@ -618,8 +606,18 @@ do
             self.PeriodicThread = nil
         end
 
+        --// Use a BindableEvent to wake the manager only when work arrives \\--
+        self.WakeEvent = Instance.new("BindableEvent")
+
         self.ManagerThread = task.spawn(function()
             while not self.IsDestroyed do
+                --// Sleep until work arrives if queue and bucket are empty \\--
+                if #self.Queue == 0 and #self.Bucket == 0 then
+                    self.WakeEvent.Event:Wait()
+                end
+
+                if self.IsDestroyed then return end
+
                 local currentTime = tick()
 
                 --// Clean bucket (efficient rebuild instead of O(n) removal) \\--
@@ -630,7 +628,6 @@ do
                             table.insert(newBucket, time)
                         end
                     end
-
                     self.Bucket = newBucket
                 end
 
@@ -639,7 +636,6 @@ do
                     local taskData = table.remove(self.Queue, 1)
                     if taskData then
                         table.insert(self.Bucket, tick())
-
                         task.defer(function()
                             if self.IsDestroyed then return end
                             self.MainCallback(table.unpack(taskData, 1, taskData.n))
@@ -647,7 +643,12 @@ do
                     end
                 end
 
-                task.wait()
+                --// If bucket is full, wait for oldest token to expire \\--
+                if #self.Bucket >= self.Burst.Max then
+                    task.wait(self.Burst.Time)
+                elseif #self.Queue == 0 then
+                    task.wait()
+                end
             end
         end)
 
