@@ -1172,11 +1172,12 @@ while true do
     Bridge:BindToTypeRaw("get-script-content", function(data)
         local source
         local scriptInstance
+        local debugId = data.debugId
 
         --// Handle GC'd script proxies: debugId is passed directly, skip loadstring \\--
-        if data.debugId then
-            scriptInstance = GetScriptByDebugId(data.debugId)
-            assert(scriptInstance, "No live script instance found for ScriptProxy with DebugId: " .. tostring(data.debugId))
+        if debugId then
+            scriptInstance = GetScriptByDebugId(debugId)
+            assert(scriptInstance, "No live script instance found for ScriptProxy with DebugId: " .. tostring(debugId))
         else
             setthreadidentity(8)
             scriptInstance = loadstring(data.source)()
@@ -1184,12 +1185,17 @@ while true do
             assert(typeof(scriptInstance) == "Instance", "Script instance is not an instance.")
             assert(scriptInstance:IsA("LuaSourceContainer"), "Script instance is not a LuaSourceContainer (Script, LocalScript, or ModuleScript).")
             assert(not (scriptInstance:IsA("Script") and scriptInstance.RunContext == Enum.RunContext.Server), "Script instance is a Server Script.")
+            debugId = scriptInstance:GetDebugId()
+        end
+
+        --// Skip decompilation if script is already in server-side cache \\--
+        if debugId and ScriptSourceUploadClientId and MappedScriptIds[debugId] then
+            return "-- Already cached on server. Use server-side index to fetch this script."
         end
 
         source = DecompileScriptSource(scriptInstance)
         assert(source, "Failed to decompile script.")
 
-        local debugId = scriptInstance:GetDebugId()
         if ScriptSourceUploadClientId and not MappedScriptIds[debugId] then
             local uploaded = UploadScriptSourceBatch(ScriptSourceUploadClientId, {
                 {
