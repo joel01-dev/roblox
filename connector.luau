@@ -699,6 +699,7 @@ local UploadQueueThread = nil
 local UploadBatchMax = 8
 local UploadFlushInterval = 0.5
 local UploadMaxAttempts = 3
+local UploadQueueMaxSize = 500 -- Max queued scripts before pausing decompilation
 local BytecodeTimeoutSeconds = 3
 local DecompileTimeoutSeconds = 12
 local MarkScriptProcessed
@@ -785,6 +786,11 @@ local function StartUploadQueue()
             task.wait()
         end
     end)
+end
+
+--// Backpressure: pause decompilation when upload queue is full \\--
+local function IsUploadBackpressured()
+    return #UploadQueue >= UploadQueueMaxSize
 end
 
 local function RunWithTimeout(timeoutSeconds, callback)
