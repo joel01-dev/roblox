@@ -680,6 +680,12 @@ do
             self.PeriodicThread = nil
         end
 
+        --// Cleanup BindableEvent to prevent memory leak \\--
+        if self.WakeEvent then
+            self.WakeEvent:Destroy()
+            self.WakeEvent = nil
+        end
+
         table.clear(self.Bucket)
         table.clear(self.Queue)
     end
