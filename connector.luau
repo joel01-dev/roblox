@@ -606,7 +606,7 @@ do
             self.PeriodicThread = nil
         end
 
-        --// Use a BindableEvent to wake the manager only when work arrives \\--
+        --// Use BindableEvent to wake only when work arrives (eliminates busy-wait) \\--
         self.WakeEvent = Instance.new("BindableEvent")
 
         self.ManagerThread = task.spawn(function()
@@ -619,23 +619,27 @@ do
                 if self.IsDestroyed then return end
 
                 local currentTime = tick()
+                local bucket, burstTime, burstMax = self.Bucket, self.Burst.Time, self.Burst.Max
 
-                --// Clean bucket (efficient rebuild instead of O(n) removal) \\--
-                if #self.Bucket > 0 then
-                    local newBucket = {}
-                    for _, time in self.Bucket do
-                        if currentTime - time < self.Burst.Time then
-                            table.insert(newBucket, time)
+                --// Compact bucket in-place (two-pointer, zero allocations) \\--
+                if #bucket > 0 then
+                    local writeIdx = 1
+                    for readIdx = 1, #bucket do
+                        if currentTime - bucket[readIdx] < burstTime then
+                            bucket[writeIdx] = bucket[readIdx]
+                            writeIdx += 1
                         end
                     end
-                    self.Bucket = newBucket
+                    for i = writeIdx, #bucket do
+                        bucket[i] = nil
+                    end
                 end
 
                 --// Process queue \\--
-                while #self.Bucket < self.Burst.Max and #self.Queue > 0 do
+                while #bucket < burstMax and #self.Queue > 0 do
                     local taskData = table.remove(self.Queue, 1)
                     if taskData then
-                        table.insert(self.Bucket, tick())
+                        table.insert(bucket, tick())
                         task.defer(function()
                             if self.IsDestroyed then return end
                             self.MainCallback(table.unpack(taskData, 1, taskData.n))
@@ -644,8 +648,8 @@ do
                 end
 
                 --// If bucket is full, wait for oldest token to expire \\--
-                if #self.Bucket >= self.Burst.Max then
-                    task.wait(self.Burst.Time)
+                if #bucket >= burstMax then
+                    task.wait(burstTime)
                 elseif #self.Queue == 0 then
                     task.wait()
                 end
@@ -699,7 +703,6 @@ local UploadQueueThread = nil
 local UploadBatchMax = 8
 local UploadFlushInterval = 0.5
 local UploadMaxAttempts = 3
-local UploadQueueMaxSize = 500 -- Max queued scripts before pausing decompilation
 local BytecodeTimeoutSeconds = 3
 local DecompileTimeoutSeconds = 12
 local MarkScriptProcessed
@@ -786,11 +789,6 @@ local function StartUploadQueue()
             task.wait()
         end
     end)
-end
-
---// Backpressure: pause decompilation when upload queue is full \\--
-local function IsUploadBackpressured()
-    return #UploadQueue >= UploadQueueMaxSize
 end
 
 local function RunWithTimeout(timeoutSeconds, callback)
@@ -1172,12 +1170,11 @@ while true do
     Bridge:BindToTypeRaw("get-script-content", function(data)
         local source
         local scriptInstance
-        local debugId = data.debugId
 
         --// Handle GC'd script proxies: debugId is passed directly, skip loadstring \\--
-        if debugId then
-            scriptInstance = GetScriptByDebugId(debugId)
-            assert(scriptInstance, "No live script instance found for ScriptProxy with DebugId: " .. tostring(debugId))
+        if data.debugId then
+            scriptInstance = GetScriptByDebugId(data.debugId)
+            assert(scriptInstance, "No live script instance found for ScriptProxy with DebugId: " .. tostring(data.debugId))
         else
             setthreadidentity(8)
             scriptInstance = loadstring(data.source)()
@@ -1185,17 +1182,12 @@ while true do
             assert(typeof(scriptInstance) == "Instance", "Script instance is not an instance.")
             assert(scriptInstance:IsA("LuaSourceContainer"), "Script instance is not a LuaSourceContainer (Script, LocalScript, or ModuleScript).")
             assert(not (scriptInstance:IsA("Script") and scriptInstance.RunContext == Enum.RunContext.Server), "Script instance is a Server Script.")
-            debugId = scriptInstance:GetDebugId()
-        end
-
-        --// Skip decompilation if script is already in server-side cache \\--
-        if debugId and ScriptSourceUploadClientId and MappedScriptIds[debugId] then
-            return "-- Already cached on server. Use server-side index to fetch this script."
         end
 
         source = DecompileScriptSource(scriptInstance)
         assert(source, "Failed to decompile script.")
 
+        local debugId = scriptInstance:GetDebugId()
         if ScriptSourceUploadClientId and not MappedScriptIds[debugId] then
             local uploaded = UploadScriptSourceBatch(ScriptSourceUploadClientId, {
                 {
