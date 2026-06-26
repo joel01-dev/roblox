@@ -25,6 +25,12 @@ export function WS(ws: WebSocket): void {
     try {
       const message: RelayMessage = JSON.parse(rawData.toString());
 
+      // Handle heartbeat-pong from secondary
+      if (message.type === "heartbeat-ping") {
+        ws.send(JSON.stringify({ type: "heartbeat-pong" }));
+        return;
+      }
+
       // Relay-level request handled directly by the primary.
       if (message.type === "list-clients" && message.id) {
         ws.send(
