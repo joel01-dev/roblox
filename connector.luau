@@ -174,6 +174,64 @@ local HttpService = cloneref(game:GetService("HttpService"))
 local LogService = cloneref(game:GetService("LogService"))
 local Players = cloneref(game:GetService("Players"))
 
+-- Resolve instance paths from either Lua syntax or Roblox GetFullName() output.
+-- Supports: game.Players.LocalPlayer..., ["Command Executor"], Players.Name.PlayerGui...
+local function ResolveInstancePath(path: string): Instance?
+    if typeof(path) ~= "string" or path == "" then
+        return nil
+    end
+
+    path = string.match(path, "^%s*(.-)%s*$") or path
+
+    local okExpr, exprResult = pcall(function()
+        return loadstring("return " .. path)()
+    end)
+    if okExpr and typeof(exprResult) == "Instance" then
+        return exprResult
+    end
+
+    local normalized = path
+    if string.sub(normalized, 1, 5) == "game." then
+        normalized = string.sub(normalized, 6)
+    end
+
+    local segments = {}
+    for segment in string.gmatch(normalized, "[^%.]+") do
+        table.insert(segments, segment)
+    end
+    if #segments == 0 then
+        return nil
+    end
+
+    local current: Instance = game
+    for _, segment in ipairs(segments) do
+        local nextChild: Instance? = nil
+
+        if current == game then
+            nextChild = game:FindFirstChild(segment)
+        end
+
+        if not nextChild then
+            nextChild = current:FindFirstChild(segment)
+        end
+
+        if not nextChild and current == Players then
+            local localPlayer = Players.LocalPlayer
+            if localPlayer and localPlayer.Name == segment then
+                nextChild = localPlayer
+            end
+        end
+
+        if not nextChild then
+            return nil
+        end
+
+        current = nextChild
+    end
+
+    return current
+end
+
 --// Compatibility Check \\--
 local WebSocketAvailable = (
     typeof(WebSocket) ~= "nil" and
@@ -1299,7 +1357,7 @@ while true do
     end)
 
     Bridge:BindToType("search-instances", function(data)
-        local rootInstance = loadstring("return " .. data.root)()
+        local rootInstance = ResolveInstancePath(data.root or "game")
         local instances = rootInstance:QueryDescendants(data.selector)
         
         local limit = math.max(1, math.min(tonumber(data.limit) or 20, 100))
@@ -1351,7 +1409,7 @@ while true do
     end)
 
     Bridge:BindToType("get-descendants-tree", function(data)
-        local rootInstance = loadstring("return " .. data.root)()
+        local rootInstance = ResolveInstancePath(data.root or "game")
         assert(typeof(rootInstance) == "Instance", "Root path did not resolve to a valid Instance.")
 
         local maxDepth = math.max(0, math.min(tonumber(data.maxDepth) or 2, 5))
@@ -1687,12 +1745,12 @@ while true do
 
         local textBox
         if typeof(path) == "string" then
-            textBox = loadstring("return " .. path)()
+            textBox = ResolveInstancePath(path)
         else
             textBox = path
         end
         
-        assert(typeof(textBox) == "Instance", "Path did not resolve to a valid Instance.")
+        assert(textBox, "Path did not resolve to a valid Instance: " .. tostring(path))
         assert(textBox:IsA("TextBox"), "Resolved Instance is not a TextBox.")
 
         textBox:CaptureFocus()
@@ -1756,12 +1814,12 @@ while true do
 
         local button
         if typeof(path) == "string" then
-            button = loadstring("return " .. path)()
+            button = ResolveInstancePath(path)
         else
             button = path
         end
 
-        assert(typeof(button) == "Instance", "Path did not resolve to a valid Instance.")
+        assert(button, "Path did not resolve to a valid Instance: " .. tostring(path))
         assert(button:IsA("GuiButton"), "Resolved Instance is not a GuiButton (e.g., TextButton or ImageButton).")
         assert(typeof(firesignal) == "function", "Your executor does not support 'firesignal', which is required for this command.")
 

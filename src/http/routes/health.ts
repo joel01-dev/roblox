@@ -1,16 +1,15 @@
 import type { IncomingMessage, ServerResponse } from "http";
-import { serverStartTime } from "../../../config.js";
-import { getActiveClients } from "../../../bridge/handlers/shared/registry.js";
+import { serverStartTime } from "../../config.js";
+import { getActiveClients } from "../../bridge/handlers/shared/registry.js";
 
 export function GET(_req: IncomingMessage, res: ServerResponse): void {
   const uptime = Date.now() - serverStartTime;
   const clientCount = getActiveClients().length;
-  const status = clientCount > 0 ? "ok" : "ok";
 
   res.writeHead(200, { "Content-Type": "application/json" });
   res.end(
     JSON.stringify({
-      status,
+      status: "ok",
       uptime,
       uptimeFormatted: formatUptime(uptime),
       clientCount,

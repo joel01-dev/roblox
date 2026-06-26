@@ -10,7 +10,11 @@ export default function register(server: McpServer): void {
       description:
         "Click a Roblox TextButton or ImageButton by firing its GUI signals. Use when direct UI activation is needed inside the active client.",
       inputSchema: z.object({
-        path: z.string().describe("The instance path to the Button"),
+        path: z
+          .string()
+          .describe(
+            "Instance path. Accepts GetFullName() from search-instances (e.g. Players.Name.PlayerGui.Foo.TextButton), game.Players.LocalPlayer..., or bracket notation for spaces: game.Players.LocalPlayer.PlayerGui[\"Command Executor\"].Frame.TextBox"
+          ),
         action: z
           .string()
           .describe(

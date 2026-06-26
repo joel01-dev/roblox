@@ -10,7 +10,11 @@ export default function register(server: McpServer): void {
       description:
         "Enter text into a Roblox TextBox by path. Can simulate keystrokes or set Text directly based on useKeyPress.",
       inputSchema: z.object({
-        path: z.string().describe("The instance path to the TextBox"),
+        path: z
+          .string()
+          .describe(
+            "Instance path. Accepts GetFullName() from search-instances (e.g. Players.Name.PlayerGui.Foo.TextBox), game.Players.LocalPlayer..., or bracket notation for spaces: game.Players.LocalPlayer.PlayerGui[\"Command Executor\"].Frame.TextBox"
+          ),
         text: z.string().describe("The string to type into the TextBox"),
         enter: z
           .boolean()

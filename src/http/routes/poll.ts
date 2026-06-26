@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "http";
 import { getClientById } from "../../bridge/handlers/shared/registry.js";
 import { HTTP_POLL_TIMEOUT } from "../../config.js";
+import { validateClientId } from "../validation.js";
 
 function sendCommands(res: ServerResponse, commands: string[]): void {
   res.writeHead(200, { "Content-Type": "application/json" });
@@ -12,6 +13,13 @@ export function GET(req: IncomingMessage, res: ServerResponse, url: URL): void {
   if (!clientId) {
     res.writeHead(400);
     res.end("Missing clientId query parameter");
+    return;
+  }
+
+  const clientIdCheck = validateClientId(clientId);
+  if (!clientIdCheck.ok) {
+    res.writeHead(400);
+    res.end(clientIdCheck.error);
     return;
   }
 

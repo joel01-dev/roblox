@@ -220,7 +220,7 @@ export async function sendAndWait(options: SendAndWaitOptions): Promise<ToolText
 
   const response = await GetResponseOfIdFromClient(callId, options.timeoutMs);
 
-  const failureField = options.failureField ?? "output";
+  const failureField = options.failureField ?? DEFAULT_FAILURE_FIELD;
 
   const isFailure =
     response === undefined ||

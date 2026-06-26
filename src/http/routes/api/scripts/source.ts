@@ -6,6 +6,7 @@ import {
   type ScriptSourceStoreIdentity,
 } from "../../../../bridge/handlers/shared/script-source-store.js";
 import { readJsonBody } from "../../../body.js";
+import { validateClientId, validateDebugId } from "../../../validation.js";
 
 export function GET(req: IncomingMessage, res: ServerResponse, url: URL): void {
   const clientId = url.searchParams.get("clientId");
@@ -14,6 +15,20 @@ export function GET(req: IncomingMessage, res: ServerResponse, url: URL): void {
   if (!clientId || !debugId) {
     res.writeHead(400, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ error: "clientId and debugId are required" }));
+    return;
+  }
+
+  const clientIdCheck = validateClientId(clientId);
+  if (!clientIdCheck.ok) {
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: clientIdCheck.error }));
+    return;
+  }
+
+  const debugIdCheck = validateDebugId(debugId);
+  if (!debugIdCheck.ok) {
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: debugIdCheck.error }));
     return;
   }
 
@@ -66,6 +81,20 @@ export async function PUT(req: IncomingMessage, res: ServerResponse): Promise<vo
   if (!clientId || !debugId || typeof source !== "string") {
     res.writeHead(400, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ error: "clientId, debugId, and source are required" }));
+    return;
+  }
+
+  const clientIdCheck = validateClientId(clientId);
+  if (!clientIdCheck.ok) {
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: clientIdCheck.error }));
+    return;
+  }
+
+  const debugIdCheck = validateDebugId(debugId);
+  if (!debugIdCheck.ok) {
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: debugIdCheck.error }));
     return;
   }
 

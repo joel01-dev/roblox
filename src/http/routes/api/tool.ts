@@ -20,6 +20,7 @@ import {
   updateProgressJob,
 } from "../../../semantic/progress.js";
 import { readJsonBody } from "../../body.js";
+import { validateClientId } from "../../validation.js";
 import { formatToolText } from "../../../tools/factory.js";
 
 
@@ -128,6 +129,11 @@ export async function POST(req: IncomingMessage, res: ServerResponse): Promise<v
     const { type, clientId, ...params } = body;
 
     if (!type) return jsonErr(res, "Missing 'type' field.");
+
+    if (clientId !== undefined) {
+      const clientIdCheck = validateClientId(clientId);
+      if (!clientIdCheck.ok) return jsonErr(res, clientIdCheck.error);
+    }
 
     // Resolve target client
     const target = resolveTargetClient(clientId);
