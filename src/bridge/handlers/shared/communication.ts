@@ -53,10 +53,18 @@ export function resetSecondaryState(): void {
   secondaryResponseResolvers.clear();
 }
 
-// ─── Low-level send ───────────────────────────────────────────────────────────
+// ─── Low-level send with retry ────────────────────────────────────────────────
+const MAX_SEND_RETRIES = 2;
+const SEND_RETRY_DELAY_MS = 100;
+
 export function SendToClient(target: RobloxClient, message: string): void {
   if (target.transport === "ws" && target.ws && target.ws.readyState === WebSocket.OPEN) {
-    target.ws.send(message);
+    // WebSocket: try once, fail silently (no retry for WS - connection is dead if send fails)
+    try {
+      target.ws.send(message);
+    } catch {
+      console.error(`[Send] WebSocket send failed for client ${target.clientId}`);
+    }
   } else if (target.transport === "http") {
     if (target.pendingHttpCommands.length >= MAX_PENDING_HTTP_COMMANDS) {
       target.pendingHttpCommands.shift();
