@@ -695,7 +695,7 @@ local SourcesToMap, SourcesProcessed, MappedSources = 0, 0, 0
 local HasStartedMapping = false
 local ScriptMappingFinished = false
 local ScriptSourceUploadClientId = nil
-local MappedSourceLimiter
+local MappedSourceLimiters = {}
 local ScriptDescendantAddedConnection = nil
 local UploadQueue = {}
 local UploadQueueDebugIds = {}
@@ -1019,7 +1019,9 @@ local function StartScriptMapping(clientId)
         PublishScriptMappingStatus(false)
 
         for idx, scriptObject in ValidScripts do
-            task.defer(MappedSourceLimiter.QueueOperation, MappedSourceLimiter, scriptObject)
+            --// Distribute round-robin across parallel workers \\--
+            local workerIndex = (idx % WORKER_COUNT) + 1
+            task.defer(MappedSourceLimiters[workerIndex].QueueOperation, MappedSourceLimiters[workerIndex], scriptObject)
             if idx % 250 == 0 then task.wait(0.1) end
         end
 
@@ -1044,8 +1046,9 @@ local function ResetScriptMappingState(clientId)
         ScriptDescendantAddedConnection = nil
     end
 
-    if MappedSourceLimiter then
-        MappedSourceLimiter:SetupManagerThread()
+    --// Reset all worker limiters \\--
+    for _, limiter in ipairs(MappedSourceLimiters) do
+        limiter:SetupManagerThread()
     end
 
     table.clear(UploadQueue)

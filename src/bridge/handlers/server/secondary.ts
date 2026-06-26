@@ -71,7 +71,7 @@ export function startAsSecondary(
 
   socket.on("message", (rawData) => {
     try {
-      const data = JSON.parse(rawData.toString()) as RobloxResponse | { type?: string };
+      const data = JSON.parse(rawData.toString()) as RobloxResponse & { type?: string };
 
       // Handle heartbeat pong
       if (data && data.type === "heartbeat-pong") {
